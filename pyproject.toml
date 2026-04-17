@@ -18,3 +18,4 @@ include = ["reason*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+asyncio_mode = "auto"
