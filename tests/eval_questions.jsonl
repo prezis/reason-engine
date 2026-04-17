@@ -1,0 +1,2 @@
+{"id":"q01","category":"control","q":"What is 2+2?","expected_strong":["4"]}
+{"id":"q02","category":"code","q":"Should we adopt LangGraph over our home-grown orchestrator for new agents?","expected_strong":["trade-off","existing patterns"]}
