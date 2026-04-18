@@ -17,10 +17,38 @@ class AuditRecord:
 
 
 class AuditLog:
+    """Append-only JSONL audit log.
+
+    Supports context-manager protocol for guaranteed fd cleanup:
+        with AuditLog() as log:
+            inv = log.start_invocation(...)
+            log.write(inv, ...)
+            log.close(inv)
+        # all still-open handles auto-closed at __exit__
+
+    Also implements __del__ as last-resort cleanup if neither close() nor
+    the context-manager path is taken (e.g., orchestrator crash between
+    start_invocation and explicit close).
+    """
+
     def __init__(self, base_dir: Path | str = "~/.reason-logs"):
         self.base_dir = Path(os.path.expanduser(str(base_dir)))
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self._handles: dict[str, int] = {}
+
+    def __enter__(self) -> "AuditLog":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close_all()
+
+    def __del__(self):
+        # Defensive: the GC may run this long after useful context. Best
+        # effort — swallow errors, we're on the cleanup path.
+        try:
+            self.close_all()
+        except Exception:
+            pass
 
     def start_invocation(self, question: str, mode: str) -> str:
         ts = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
@@ -46,3 +74,8 @@ class AuditLog:
         fd = self._handles.pop(invocation_id, None)
         if fd is not None:
             os.close(fd)
+
+    def close_all(self) -> None:
+        """Close every open invocation handle. Idempotent."""
+        for inv_id in list(self._handles.keys()):
+            self.close(inv_id)

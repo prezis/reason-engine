@@ -44,3 +44,22 @@ def test_audit_filename_is_deterministic_per_invocation(tmp_path):
     inv1 = log.start_invocation(question="a question", mode="default")
     inv2 = log.start_invocation(question="a question", mode="default")
     assert inv1 != inv2
+
+
+def test_audit_context_manager_closes_handles(tmp_path):
+    """Context manager must release fds at __exit__ even if caller forgets close()."""
+    with AuditLog(base_dir=tmp_path) as log:
+        inv = log.start_invocation(question="q", mode="default")
+        log.write(inv, AuditRecord(stage="mid", payload={"x": 1}))
+        # intentionally do NOT call log.close(inv)
+        assert inv in log._handles
+    assert log._handles == {}
+
+
+def test_audit_close_all_is_idempotent(tmp_path):
+    log = AuditLog(base_dir=tmp_path)
+    log.start_invocation(question="q1", mode="default")
+    log.start_invocation(question="q2", mode="default")
+    log.close_all()
+    log.close_all()  # second call must not raise
+    assert log._handles == {}
