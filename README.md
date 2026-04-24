@@ -34,52 +34,72 @@ No LLM keys, no network calls baked in. The workers run inside Claude Code as
 subagents; the judge runs locally via
 [prezis/local-ai-mcp](https://github.com/prezis/local-ai-mcp).
 
-## Install — full pipeline
+## Install — one command
 
-You need four pieces. Three are public repos; this one is the fourth.
-
-### 1. This engine
+This repo is the canonical source for the whole skill. Clone it, run the
+install script, done:
 
 ```bash
 git clone https://github.com/prezis/reason-engine.git ~/ai/reason-engine
 cd ~/ai/reason-engine
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-pytest -q   # should be all green
+./scripts/install-skill.sh
 ```
 
-### 2. Slash command + 5 worker prompts
+What the script does (idempotent, safe to re-run):
 
-Lives in [prezis/dotfiles](https://github.com/prezis/dotfiles):
+1. Copies `claude/commands/reason.md` + `claude/commands/reason/workers/*.md`
+   to `~/.claude/commands/` so the `/reason` slash command resolves.
+2. Copies `claude/enforcements/reason-validator.py` +
+   `claude/enforcements/reason-trigger.py` to `~/.claude/enforcements/`.
+3. Registers a `PostToolUse(Agent)` hook in `~/.claude/settings.json`
+   (creates a minimal `settings.json` if none exists).
+4. Runs `pip install -e .` so `python -m reason.validator` is on PATH.
+5. Runs `pytest -q` to confirm the install.
 
-```bash
-# from the dotfiles repo
-cp .claude/commands/reason.md                  ~/.claude/commands/
-cp -r .claude/commands/reason/                 ~/.claude/commands/
+Knobs: `CLAUDE_DIR=/custom/path`, `SKIP_PIP=1`, `SKIP_TESTS=1`.
+
+### Optional Layer-5 — rubric judge MCP tool
+
+The Stage-3 rubric judge runs on [prezis/local-ai-mcp](https://github.com/prezis/local-ai-mcp).
+That dependency is optional — the slash command's Stage 4 degrades gracefully
+to majority-vote + confidence labels if the MCP tool is missing. Install
+`local-ai-mcp` separately per its README if you want cross-model judging
+via local qwen3.5:27b.
+
+## Repo layout
+
+```
+reason-engine/
+├── reason/                     # Python package (parser, validator,
+│   │                             semantic_sampler, audit, trigger)
+│   └── ...
+├── claude/                     # Claude Code skill artifacts (canonical)
+│   ├── commands/
+│   │   ├── reason.md           # /reason slash command orchestrator
+│   │   └── reason/workers/     # 5 role prompts (adversarial, skeptic,
+│   │                             synthesist, domain-expert, baseline)
+│   └── enforcements/
+│       ├── reason-validator.py # PostToolUse(Agent) hook — Layer-1 gate
+│       └── reason-trigger.py   # UserPromptSubmit hook — auto-invoke
+├── tests/                      # 140+ tests covering all of the above
+├── scripts/
+│   └── install-skill.sh        # one-command install + settings wiring
+├── pyproject.toml
+├── README.md
+└── LICENSE                     # MIT
 ```
 
-- `reason.md` — the `/reason` slash command (orchestrator).
-- `reason/workers/{adversarial,skeptic,synthesist,domain-expert,baseline}.md`
-  — the 5 role prompts.
+## Development workflow
 
-### 3. (Optional) Auto-trigger hook
+If you're editing the skill (as opposed to using it):
 
-Also in [prezis/dotfiles](https://github.com/prezis/dotfiles):
-
-```bash
-cp .claude/enforcements/reason-trigger.py  ~/.claude/enforcements/
-```
-
-Wire it into `settings.json` as a `UserPromptSubmit` hook. It uses
-`reason.trigger.detect_trigger` from this repo to flag prompts that would
-benefit from `/reason` (non-trivial, multi-domain, high-stakes).
-
-### 4. Rubric judge MCP tool
-
-Lives in [prezis/local-ai-mcp](https://github.com/prezis/local-ai-mcp). The
-slash command calls `mcp__local-ai__local_rubric_judge` in Stage 3. Requires
-a local Ollama with `qwen3.5:27b` (or any model you wire in). Install the
-MCP server per its README and the judge tool is available.
+- Edit files under `claude/` in this repo first, not under `~/.claude/`
+  directly. This repo is the source of truth.
+- After editing, re-run `./scripts/install-skill.sh` to redeploy into
+  `~/.claude/`. The script is idempotent; it won't re-register the hook.
+- Tests live under `tests/` and cover prompts, validator, semantic sampler,
+  parser, slash command, and hook behavior (via subprocess).
 
 ## Grounding contract — why the workers actually invoke tools
 
