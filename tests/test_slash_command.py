@@ -8,6 +8,9 @@ import os
 import pytest
 
 SLASH_CMD_PATH = os.path.expanduser("~/.claude/commands/reason.md")
+CANONICAL_CMD_PATH = os.path.expanduser(
+    "~/ai/reason-engine/claude/commands/reason.md"
+)
 
 
 @pytest.fixture(scope="module")
@@ -86,4 +89,36 @@ def test_supports_debate_mode(body: str):
 def test_references_rubric_judge_tool(body: str):
     assert "mcp__local-ai__local_rubric_judge" in body, (
         "Stage 3 must call the local rubric judge MCP tool"
+    )
+
+
+def test_stage3_documents_built_in_cli_fallback(body: str):
+    """Stage 3 must document the built-in reason.judge CLI as a fallback
+    for users who don't have the MCP tool registered — otherwise the skill
+    silently reverts to Claude-internal self-grading, which is the
+    same-family anti-pattern this whole session was about."""
+    assert "python -m reason.judge" in body, (
+        "Stage 3 must document the `python -m reason.judge` CLI fallback "
+        "for when the MCP tool is unavailable"
+    )
+    assert "degraded" in body.lower() or "claude-inline" in body.lower(), (
+        "If falling back to Claude-internal scoring, the output must flag "
+        "degraded quality so the user knows"
+    )
+
+
+def test_canonical_slash_command_matches_live():
+    """The canonical reason.md in reason-engine/claude/commands/ must be
+    byte-identical to the deployed ~/.claude/commands/reason.md. Drift
+    between them means someone edited live instead of canonical."""
+    if not os.path.exists(CANONICAL_CMD_PATH):
+        pytest.skip("canonical not present in this checkout")
+    with open(SLASH_CMD_PATH) as f:
+        live = f.read()
+    with open(CANONICAL_CMD_PATH) as f:
+        canonical = f.read()
+    assert live == canonical, (
+        "reason.md drift between live (~/.claude/) and canonical "
+        "(~/ai/reason-engine/claude/). Re-run scripts/install-skill.sh "
+        "to sync, or edit the canonical first."
     )

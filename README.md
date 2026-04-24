@@ -59,13 +59,108 @@ What the script does (idempotent, safe to re-run):
 
 Knobs: `CLAUDE_DIR=/custom/path`, `SKIP_PIP=1`, `SKIP_TESTS=1`.
 
-### Optional Layer-5 — rubric judge MCP tool
+## Maximum-quality setup (optional but recommended)
 
-The Stage-3 rubric judge runs on [prezis/local-ai-mcp](https://github.com/prezis/local-ai-mcp).
-That dependency is optional — the slash command's Stage 4 degrades gracefully
-to majority-vote + confidence labels if the MCP tool is missing. Install
-`local-ai-mcp` separately per its README if you want cross-model judging
-via local qwen3.5:27b.
+The one-command install gets you the core skill — slash command, 5 workers,
+structural validator, auto-trigger hook. That works on any Linux/macOS box
+with Python.
+
+To unlock the full stack (cross-model rubric judge in Stage 3, Layer-5
+semantic citation sampler), you need a local GPU + Ollama + one model:
+
+### 1. Ollama + qwen3.5:27b
+
+```bash
+# Linux: curl | sh; macOS: brew install ollama; Windows: .exe installer
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Start the service (systemd auto-starts on most Linux distros; macOS uses ollama serve)
+systemctl --user start ollama          # Linux
+# or:  ollama serve &                  # any OS
+
+# Pull the judge model (~16 GB Q4 quant, ~23 GB VRAM loaded)
+ollama pull qwen3.5:27b
+
+# Sanity probe — should return a JSON body with "response"
+curl -s http://localhost:11434/api/generate \
+  -d '{"model":"qwen3.5:27b","prompt":"2+2=?","stream":false,
+       "options":{"num_predict":50},"think":false}' | jq .done_reason
+```
+
+**VRAM budget:** `qwen3.5:27b` Q4_K_M uses ~23 GB. If your card is smaller,
+swap in `qwen3:4b` (~3 GB) via `REASON_JUDGE_MODEL=qwen3:4b` env var —
+quality drops, but the pipeline still runs.
+
+### 2. Stage-3 rubric judge — two paths
+
+**Path A (built-in, no MCP needed) — recommended for external users.**
+The slash command's Stage 3 falls back to a built-in CLI automatically:
+
+```bash
+echo '{"question":"...","abstract_q":"...","worker_reports":[...]}' \
+  | python -m reason.judge
+```
+
+Zero extra install — it's already in this repo. Requires only step 1.
+The slash command detects the MCP tool is missing and uses this path.
+
+**Path B (MCP tool) — if you want the judge exposed as an MCP tool across
+other projects too.** Write a minimal MCP server that wraps
+`reason.judge.rubric_judge_sync`. Reference skeleton:
+
+```python
+# my-mcp-server/rubric_judge_tool.py
+from mcp.server.fastmcp import FastMCP
+from reason.judge import rubric_judge_sync
+import asyncio
+
+mcp = FastMCP("local-ai")
+
+@mcp.tool()
+async def local_rubric_judge(question: str, abstract_q: str,
+                              worker_reports: list[dict]) -> dict:
+    result = await asyncio.to_thread(
+        rubric_judge_sync, question, abstract_q, worker_reports,
+    )
+    from dataclasses import asdict
+    return asdict(result)
+```
+
+Register the server in your `~/.claude.json` `mcpServers` section. Details
+in the MCP docs at https://modelcontextprotocol.io/.
+
+### 3. Layer-5 semantic citation sampler (automatic)
+
+Once Ollama + qwen3.5:27b are installed (step 1), the semantic sampler
+`reason/semantic_sampler.py` works out of the box — it calls Ollama
+directly via httpx, no MCP dependency. The `PostToolUse(Agent)` hook
+writes validation records; to run Layer-5 on a completed reason run:
+
+```bash
+# from Python
+from reason.parser import parse_worker_report
+from reason.semantic_sampler import check_report, SamplerConfig
+# ... see README "Runtime enforcement" section for the full example
+```
+
+### 4. Verification
+
+After steps 1-3, run `pytest -q`. All 155+ tests should pass. Then in a
+Claude Code session invoke `/reason <non-trivial question>` and check
+`~/.reason-logs/<session_id>/validation.jsonl` — you should see one
+record per dispatched worker with `grounding_score` > 0.
+
+### What works WITHOUT any of this
+
+- `/reason` slash command with 5 parallel workers
+- Structural Layer-1 validator (citations, file existence, line-range bounds)
+- PostToolUse(Agent) hook logging to validation.jsonl
+- Auto-trigger on matching prompts
+
+Stage-3 rubric scoring in that case falls back to Claude-internal
+self-grading — the synthesis still works, but the `degraded: true`
+flag will appear in the Grounding-audit footer. For serious use, do
+step 1 above at minimum.
 
 ## Repo layout
 

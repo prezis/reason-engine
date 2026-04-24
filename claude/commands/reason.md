@@ -29,9 +29,27 @@ section below.
 
 ## Stage 3 — Rubric judge
 
-Call `mcp__local-ai__local_rubric_judge` with: question, abstract_q, worker_reports.
-Model: qwen3.5:27b. Zero Claude tokens. Returns per-worker scores 1-5 across 5
-criteria + overall ranking.
+**Judge source (try in order):**
+
+1. **MCP tool (preferred when registered).** Call `mcp__local-ai__local_rubric_judge`
+   with: question, abstract_q, worker_reports. Model: qwen3.5:27b. Zero
+   Claude tokens. Returns per-worker scores 1-5 across 5 criteria + ranking.
+
+2. **Built-in CLI (fallback when the MCP tool is not registered).** Invoke
+   via Bash:
+   ```
+   echo '<json>' | python -m reason.judge
+   ```
+   where `<json>` is `{"question": "...", "abstract_q": "...", "worker_reports": [{"role": "...", "report": "..."}, ...]}`.
+   Same qwen3.5:27b, same rubric schema, same output. Requires Ollama
+   running on localhost:11434 with `qwen3.5:27b` pulled.
+
+3. **Claude-internal fallback (last resort).** If neither the MCP tool nor
+   Ollama is available, score the workers yourself against the same 5
+   criteria and explicitly flag `degraded: true` + `judge_source: "claude-inline"`
+   in the Stage-4 Grounding-audit footer. This is the same-family
+   self-grading anti-pattern — acknowledge it so the user knows quality
+   is reduced.
 
 **Grounding check (before judge scoring):**
 
