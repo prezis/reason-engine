@@ -115,6 +115,49 @@ fail if a future edit strips the `MANDATORY PRE-WORK` block, removes tool
 names, drops the line-range citation format, or accidentally adds tool
 mandates to baseline.
 
+## Runtime enforcement (Layer-1 + Layer-5 per defeating-lussers-law.md)
+
+Prompt-level mandates are requests to the LLM, not guarantees. The engine
+ships two deterministic enforcement layers that run outside the worker's
+control loop — the agent cannot skip them:
+
+**Layer 1 — Structural validator (`reason/validator.py`)**
+- Triggered by a `PostToolUse(Agent)` hook whenever a REASON worker
+  subagent completes (`~/.claude/enforcements/reason-validator.py`).
+- Parses the worker's final message via `reason.parser.parse_worker_report`.
+- Applies role-aware thresholds (see `ROLE_THRESHOLDS` in validator.py):
+  empirical workers need ≥1–3 tool uses and ≥2–3 citations; baseline is
+  exempt (tool-less by design).
+- For every `path:Lstart-Lend > "quote"` citation: resolves the path
+  against search roots, checks the line range is within the file, checks
+  the quote is a substring of the file text at that range.
+- Writes a validation record to `~/.reason-logs/<session_id>/validation.jsonl`.
+- WARN mode by default — logs violations to stderr but never blocks the
+  tool chain. Promotion to BLOCK happens after ~20 live calibration runs,
+  matching the kopanie `post-change-validate.json` WARN→BLOCK precedent.
+
+**Layer 5 — Semantic sampler (`reason/semantic_sampler.py`)**
+- Catches the failure mode the structural validator cannot: a quote that
+  exists at the cited range but doesn't actually support the claim.
+- Samples 20% of validated citations (deterministic, seed-based) and
+  routes each through `qwen3.5:27b` on local Ollama with a minimal prompt
+  containing only `(file_text_at_range, claim_context, quote)` — no
+  reasoning trace, so the judge can't be cued.
+- Returns per-citation verdicts: `supports | partial | unrelated | unknown
+  | file_missing`. Any `unrelated` verdict fails the semantic gate.
+- Cross-model by design: workers run on Claude; the judge runs on a
+  different model family entirely.
+
+The validator + hook are regression-guarded by:
+- `tests/test_parser.py` (10 tests) — parser correctness
+- `tests/test_validator.py` (15 tests) — role thresholds + filesystem checks
+- `tests/test_semantic_sampler.py` (10 tests) — sampling + verdict parsing
+- `tests/test_hook_integration.py` (6 tests) — end-to-end subprocess call
+
+The hook is wired via `PostToolUse` matcher `"Agent"` in
+`~/.claude/settings.json`. The CLI entry point `python -m reason.validator`
+is also available for manual or CI invocation.
+
 ## Usage
 
 In any Claude Code session:
