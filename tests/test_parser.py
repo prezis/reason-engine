@@ -111,3 +111,40 @@ A citation: `some/file.md:L25-L25 > "a quote"`.
     assert len(r.citations) == 1
     assert r.citations[0].line_start == 25
     assert r.citations[0].line_end == 25
+
+
+# ── security: path traversal + DoS (from local_code_review 2026-04-24) ──
+
+def test_parse_rejects_parent_directory_traversal_in_citation_paths():
+    """Citations with `..` segments are rejected at parse time — they
+    have no legitimate use in worker reports and would force the
+    downstream validator to defend against traversal attacks it can't
+    always guarantee (symlinks, TOCTOU, etc.)."""
+    md = '''# Report
+## Tool-use summary
+- Read
+
+Citation: `../../etc/passwd:L1-L1 > "root:x:0:0"`.
+Also: `../../../root/secret.md:L1-L5 > "secret"`.
+'''
+    r = parse_worker_report("adversarial", md)
+    assert r.citations == [], (
+        "parent-directory-traversal paths must be rejected at parse; "
+        f"got {[c.path for c in r.citations]}"
+    )
+
+
+def test_parse_caps_citation_count_against_dos():
+    """An adversarial worker could emit thousands of citations to
+    exhaust memory. Parser must cap."""
+    # Generate 500 distinct valid citations
+    md_lines = ["# Report", "## Tool-use summary", "- Read"]
+    for i in range(500):
+        md_lines.append(f'- `a/b/file{i}.md:L1-L1 > "quote{i}"`')
+    md = "\n".join(md_lines)
+
+    r = parse_worker_report("adversarial", md)
+    # Current sane cap: 100. Test just asserts we don't accept 500+.
+    assert len(r.citations) <= 200, (
+        f"parser must cap citations ({len(r.citations)} accepted)"
+    )

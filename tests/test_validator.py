@@ -147,6 +147,40 @@ def test_quote_mismatch_is_flagged(tmp_cite_file):
     assert "quote_mismatch" in kinds
 
 
+def test_citation_escaping_search_roots_via_parent_dir_is_rejected(tmp_path):
+    """A citation that resolves outside any declared search root must
+    fail with path_not_found (or a dedicated escape violation) — we
+    don't let `../../etc/passwd`-style resolutions succeed just because
+    the file happens to exist."""
+    # Create a file outside the search root
+    outside = tmp_path / "outside.md"
+    outside.write_text("secret\n")
+
+    root = tmp_path / "allowed"
+    root.mkdir()
+
+    # Citation path uses parent-dir traversal to reach outside the root
+    rep = WorkerReport(
+        role="adversarial",
+        raw="",
+        tool_uses_count=5,
+        citations=[
+            Citation(
+                path="../outside.md",
+                line_start=1,
+                line_end=1,
+                quote="secret",
+            ),
+        ],
+    )
+    res = validate_report(rep, search_roots=[root])
+    kinds = {v.kind for v in res.violations}
+    assert "path_not_found" in kinds or "path_escapes_root" in kinds, (
+        "resolved path escaping search_roots must be flagged, got: "
+        f"{kinds}"
+    )
+
+
 def test_valid_citation_passes(tmp_cite_file):
     """Citation whose quote IS a substring of the file at the range passes."""
     rep = WorkerReport(

@@ -57,6 +57,45 @@ def test_sample_respects_minimum_one():
     assert len(out) >= 1
 
 
+def test_sample_max_sample_zero_returns_empty():
+    """max_sample=0 must be respected — don't floor to 1. Flagged by
+    local_code_review 2026-04-24."""
+    cits = [_cit(i) for i in range(10)]
+    out = sample_citations(cits, SamplerConfig(sample_rate=1.0, max_sample=0))
+    assert out == []
+
+
+def test_check_report_survives_backend_error_on_one_citation():
+    """A single backend failure must NOT crash the whole report —
+    return `unknown` verdict for that citation and continue."""
+    from reason.parser import WorkerReport
+    cits = [_cit(0), _cit(1), _cit(2)]
+    report = WorkerReport(role="adversarial", raw="", tool_uses_count=5, citations=cits)
+
+    call_count = {"n": 0}
+
+    def flaky_backend(prompt):
+        call_count["n"] += 1
+        if call_count["n"] == 2:
+            raise ConnectionError("simulated transient failure")
+        return '{"verdict": "supports", "confidence": 0.9, "rationale": "ok"}'
+
+    verdicts = check_report(
+        report=report,
+        claim_context="claim",
+        file_reader=lambda p: "quote-X\n",
+        config=SamplerConfig(sample_rate=1.0, max_sample=3, seed=0),
+        backend=flaky_backend,
+    )
+    assert len(verdicts) == 3, (
+        "single backend error must not crash the loop"
+    )
+    kinds = [v.verdict for v in verdicts]
+    assert "unknown" in kinds or "backend_error" in kinds, (
+        f"transient failure should be recorded, not propagated: {kinds}"
+    )
+
+
 # ── semantic check with injected backend ────────────────────────
 
 def test_semantic_check_supports_verdict():

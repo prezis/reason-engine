@@ -49,6 +49,25 @@ WORKER_DESCRIPTION_RE = re.compile(
     r"REASON\s+worker\s*[:\-–]\s*(?P<role>[a-z\-]+)", re.IGNORECASE
 )
 
+# Hard limit on stdin payload size — defends against memory-exhaustion
+# attacks where the caller passes a multi-GB JSON blob. Real PostToolUse
+# payloads are <64 KB; 1 MB is generous.
+MAX_STDIN_BYTES = 1_000_000
+
+# Allowed characters in session_id after sanitization — prevents path
+# traversal via `../` sequences injected into the log directory path.
+_SESSION_ID_SANITIZE_RE = re.compile(r"[^A-Za-z0-9_\-]")
+
+
+def _sanitize_session_id(raw: str) -> str:
+    """Collapse anything that isn't [A-Za-z0-9_-] to '_'. Truncate to 64
+    chars. Empty input becomes 'unknown'.
+    """
+    if not raw:
+        return "unknown"
+    cleaned = _SESSION_ID_SANITIZE_RE.sub("_", raw)[:64]
+    return cleaned or "unknown"
+
 KNOWN_ROLES = {
     "adversarial", "skeptic", "synthesist", "domain-expert", "baseline",
 }
@@ -119,16 +138,26 @@ def _extract_report_text(tool_response) -> str:
 
 
 def _write_record(session_id: str, record: dict) -> None:
-    session_dir = LOG_DIR / session_id
+    # Sanitize BEFORE joining into the path — defense in depth even though
+    # main() already sanitizes at the entry point.
+    safe_id = _sanitize_session_id(session_id)
+    session_dir = LOG_DIR / safe_id
     session_dir.mkdir(parents=True, exist_ok=True)
     log_path = session_dir / "validation.jsonl"
-    fd = os.open(
-        str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600
-    )
+    # Context manager handles cleanup even on JSONEncodeError mid-write;
+    # file mode 'a' is atomic-enough for JSONL append (single-line writes
+    # fit inside PIPE_BUF on POSIX).
     try:
-        os.write(fd, (json.dumps(record, ensure_ascii=False) + "\n").encode("utf-8"))
-    finally:
-        os.close(fd)
+        line = json.dumps(record, ensure_ascii=False) + "\n"
+    except (TypeError, ValueError) as e:
+        _stderr(f"[reason-validator] record serialization failed: {e}")
+        return
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(line)
+    try:
+        os.chmod(log_path, 0o600)
+    except OSError:
+        pass  # best-effort perm; not load-bearing
 
 
 def main() -> int:
@@ -136,10 +165,16 @@ def main() -> int:
         return 0
 
     try:
-        raw = sys.stdin.read()
+        raw = sys.stdin.read(MAX_STDIN_BYTES + 1)
     except Exception:
         return 0
     if not raw:
+        return 0
+    if len(raw) > MAX_STDIN_BYTES:
+        _stderr(
+            f"[reason-validator] stdin payload > {MAX_STDIN_BYTES} bytes; "
+            f"refusing to parse (possible DoS)"
+        )
         return 0
 
     try:
@@ -157,7 +192,7 @@ def main() -> int:
     if role is None:
         return 0  # not a REASON worker dispatch
 
-    session_id = payload.get("session_id", "unknown")
+    session_id = _sanitize_session_id(payload.get("session_id", "unknown"))
     tool_response = (
         payload.get("tool_response")
         or payload.get("tool_result")

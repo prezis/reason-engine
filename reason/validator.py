@@ -79,17 +79,50 @@ def _resolve_citation_path(
     """Return an existing absolute Path or None. Tries:
       1. Path as-is (absolute or relative to CWD).
       2. Each search root joined with path_str.
+
+    Security: if search_roots is non-empty, the resolved path MUST be
+    within one of the provided roots. Otherwise we'd follow
+    ../../etc/passwd-style traversal. Absolute paths and CWD-relative
+    paths are always allowed when search_roots is empty (test/CLI mode).
     """
     candidate = Path(path_str).expanduser()
+    resolved: Path | None = None
     if candidate.is_absolute() and candidate.is_file():
-        return candidate
-    if candidate.is_file():
-        return candidate.resolve()
-    for root in search_roots:
-        joined = (root / path_str).expanduser()
-        if joined.is_file():
-            return joined.resolve()
-    return None
+        resolved = candidate.resolve()
+    elif candidate.is_file():
+        resolved = candidate.resolve()
+
+    if resolved is None:
+        for root in search_roots:
+            joined = (root / path_str).expanduser()
+            if joined.is_file():
+                r = joined.resolve()
+                # Enforce the resolved path stays inside this root —
+                # blocks `../../etc/passwd` from escaping via symlinks
+                # or lexical traversal.
+                try:
+                    root_resolved = root.expanduser().resolve()
+                    r.relative_to(root_resolved)
+                except ValueError:
+                    continue  # resolved outside root — reject silently
+                resolved = r
+                break
+
+    if resolved is None:
+        return None
+
+    # When search_roots is provided, also confirm absolute-path citations
+    # (and CWD-relative ones resolved above) fall within one of the roots.
+    if search_roots:
+        for root in search_roots:
+            try:
+                resolved.relative_to(root.expanduser().resolve())
+                return resolved
+            except ValueError:
+                continue
+        return None  # escaped every root
+
+    return resolved
 
 
 def _check_citation(

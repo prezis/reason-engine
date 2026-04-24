@@ -60,8 +60,9 @@ def sample_citations(
 ) -> list[Citation]:
     """Deterministic sample. With a non-zero sample_rate AND at least one
     citation, we always sample at least one — the rate should never silently
-    drop grounding to zero for small N."""
-    if not citations or config.sample_rate <= 0.0:
+    drop grounding to zero for small N. However, if the caller explicitly
+    sets max_sample=0, that's a request to sample nothing and we honor it."""
+    if not citations or config.sample_rate <= 0.0 or config.max_sample == 0:
         return []
     rng = random.Random(config.seed)
     n = len(citations)
@@ -219,9 +220,22 @@ def check_report(
                 )
             )
             continue
-        verdicts.append(
-            semantic_check_citation(cit, text, claim_context, backend)
-        )
+        # Wrap backend call so a single transient failure (network blip,
+        # Ollama swap delay, malformed response) does NOT crash the whole
+        # report — record `unknown` and continue the batch.
+        try:
+            verdicts.append(
+                semantic_check_citation(cit, text, claim_context, backend)
+            )
+        except Exception as e:  # backend-specific errors vary by impl
+            verdicts.append(
+                SemanticVerdict(
+                    citation=cit,
+                    verdict="unknown",
+                    confidence=0.0,
+                    rationale=f"backend error: {type(e).__name__}: {str(e)[:120]}",
+                )
+            )
     return verdicts
 
 

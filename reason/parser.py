@@ -97,21 +97,37 @@ def _count_tool_uses(block: str) -> int:
     return len(_BULLET_RE.findall(block))
 
 
+# Hard cap on citations per report — defends against adversarial workers
+# that emit thousands of citations to exhaust memory. Real REASON reports
+# have <50 citations; 100 is a generous upper bound.
+MAX_CITATIONS_PER_REPORT = 100
+
+
 def _extract_citations(markdown: str) -> list[Citation]:
     out: list[Citation] = []
     seen: set[tuple[str, int, int, str]] = set()
     for m in _CITATION_RE.finditer(markdown):
+        if len(out) >= MAX_CITATIONS_PER_REPORT:
+            break  # DoS guard
         start = int(m.group("start"))
         end = int(m.group("end"))
         if end < start:
             continue  # malformed range — skip, validator won't see it
-        key = (m.group("path"), start, end, m.group("quote"))
+
+        path = m.group("path")
+        # Reject parent-directory traversal at parse time. The downstream
+        # validator also defends, but bouncing traversal attempts here
+        # keeps the WorkerReport clean and simplifies validator invariants.
+        if ".." in path.split("/"):
+            continue
+
+        key = (path, start, end, m.group("quote"))
         if key in seen:
             continue
         seen.add(key)
         out.append(
             Citation(
-                path=m.group("path"),
+                path=path,
                 line_start=start,
                 line_end=end,
                 quote=m.group("quote"),

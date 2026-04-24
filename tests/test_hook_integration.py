@@ -154,3 +154,63 @@ def test_hook_handles_empty_stdin():
         timeout=5,
     )
     assert res.returncode == 0
+
+
+@pytest.mark.skipif(not HOOK.exists(), reason="hook not installed")
+def test_hook_sanitizes_session_id_path_traversal(tmp_path):
+    """Adversarial session_id like `../../../tmp/escape` must NOT cause
+    the hook to write outside the log root. Traversal chars get collapsed
+    to `_` by the sanitizer."""
+    report_text = (FIXTURES / "worker_adversarial_ok.md").read_text()
+    evil_session = "../../../tmp/escape-attempt"
+    payload = {
+        "session_id": evil_session,
+        "tool_name": "Agent",
+        "tool_input": {
+            "description": "REASON worker: adversarial red-team",
+            "subagent_type": "general-purpose",
+            "prompt": "...",
+        },
+        "tool_response": report_text,
+    }
+    res = _invoke_hook(payload, {"REASON_VALIDATOR_LOG_DIR": str(tmp_path)})
+    assert res.returncode == 0
+
+    # No escape to /tmp/escape-attempt/ — that would be a bug
+    assert not (tmp_path.parent / "escape-attempt").exists(), (
+        "session_id with ../../../ must not let the hook write outside LOG_DIR"
+    )
+    # The sanitized directory should be under tmp_path, with traversal chars
+    # collapsed to underscores
+    children = [p.name for p in tmp_path.iterdir()]
+    assert children, "at least one sanitized session dir should exist"
+    for name in children:
+        assert ".." not in name and "/" not in name, (
+            f"sanitized session_id must not contain .. or /: {name}"
+        )
+
+
+@pytest.mark.skipif(not HOOK.exists(), reason="hook not installed")
+def test_hook_refuses_oversized_stdin(tmp_path):
+    """A multi-MB stdin payload (possible DoS) must be refused with
+    an explicit stderr warning. Exit 0 (WARN mode), but no log file
+    should be written."""
+    # 2 MB of JSON-shaped garbage — exceeds MAX_STDIN_BYTES
+    big_report = "x" * (2 * 1024 * 1024)
+    payload = {
+        "session_id": "dos-test",
+        "tool_name": "Agent",
+        "tool_input": {
+            "description": "REASON worker: adversarial red-team",
+            "prompt": "x",
+        },
+        "tool_response": big_report,
+    }
+    res = _invoke_hook(payload, {"REASON_VALIDATOR_LOG_DIR": str(tmp_path)})
+    assert res.returncode == 0
+    assert "DoS" in res.stderr or "> " in res.stderr, (
+        f"oversized stdin should emit a DoS-guard warning; got: {res.stderr!r}"
+    )
+    assert not (tmp_path / "dos-test").exists(), (
+        "oversized stdin must not produce a log file"
+    )
