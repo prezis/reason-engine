@@ -87,9 +87,28 @@ curl -s http://localhost:11434/api/generate \
        "options":{"num_predict":50},"think":false}' | jq .done_reason
 ```
 
-**VRAM budget:** `qwen3.5:27b` Q4_K_M uses ~23 GB. If your card is smaller,
-swap in `qwen3:4b` (~3 GB) via `REASON_JUDGE_MODEL=qwen3:4b` env var —
-quality drops, but the pipeline still runs.
+**Model sizing by card** (all Q4_K_M quants unless noted):
+
+| GPU | VRAM | Recommended judge model | Loaded size | Notes |
+|---|---|---|---|---|
+| RTX 5090 / A6000 / H100 | 32+ GB | `qwen3.5:27b` | ~22 GB | Comfortable headroom; default. |
+| **RTX 4090 / 3090** | **24 GB** | **`qwen3.5:27b`** | **~22 GB** | **Fits, but tight. If you see OOM during inference, see fallbacks below.** |
+| RTX 4080 / 3080 (16 GB) | 16 GB | `qwen3:14b` or `hermes3:8b` | 8-10 GB | Switch via `REASON_JUDGE_MODEL=qwen3:14b`. |
+| RTX 4070 / 3070 (12 GB) | 12 GB | `qwen3:8b` | ~5 GB | Quality drop is small for rubric scoring. |
+| RTX 4060 / 3060 (8 GB) | 8 GB | `qwen3:4b` | ~3 GB | Minimum viable; expect noisier scores. |
+| CPU only | — | `qwen3:4b` on CPU | ~3 GB | Slow (~10-30s per judge call); works. |
+
+**Swapping models:** set `REASON_JUDGE_MODEL=<ollama-tag>` in your shell or
+add it to the hook's environment. The same variable is respected by the
+built-in `python -m reason.judge` CLI and by the `reason/semantic_sampler.py`
+Layer-5 backend, so both gates use the same model.
+
+**4090-specific guidance.** Because qwen3.5:27b loads to ~22 GB on a 24 GB
+card, leave the GPU otherwise idle while running /reason (no browser
+hardware-acceleration, no other Ollama models resident). If you want a
+single model that handles everything comfortably on 24 GB, use
+`qwen3:14b` (~8 GB loaded) — it scores well enough on the rubric task
+and gives you ~15 GB free for parallel work.
 
 ### 2. Stage-3 rubric judge — two paths
 
