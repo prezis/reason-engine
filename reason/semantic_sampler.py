@@ -227,13 +227,17 @@ def check_report(
 
 # ── default backend (Ollama qwen3.5:27b via httpx) ──────────────
 
-_OLLAMA_URL = "http://localhost:11434/api/generate"
+_OLLAMA_URL = "http://localhost:11434/api/chat"
 _OLLAMA_MODEL = "qwen3.5:27b"
 
 
 def _default_ollama_backend(prompt: str) -> str:
-    """Call qwen3.5:27b on local Ollama. Raises if httpx is missing or the
-    request fails — caller should wrap or inject a stub backend for tests.
+    """Call qwen3.5:27b on local Ollama. Uses the /api/chat endpoint with
+    `think: false` because qwen3.x models otherwise enter a silent-thinking
+    mode that emits empty responses inside num_predict-limited budgets.
+
+    Raises if httpx is missing or the request fails — caller should wrap
+    or inject a stub backend for tests.
     """
     import httpx  # local import so tests that stub don't need httpx
 
@@ -241,14 +245,16 @@ def _default_ollama_backend(prompt: str) -> str:
         _OLLAMA_URL,
         json={
             "model": _OLLAMA_MODEL,
-            "prompt": prompt,
+            "think": False,
+            "messages": [{"role": "user", "content": prompt}],
             "stream": False,
-            "options": {"temperature": 0.0, "num_predict": 200},
+            "options": {"temperature": 0.0, "num_predict": 400},
         },
-        timeout=60.0,
+        timeout=90.0,
     )
     resp.raise_for_status()
-    return resp.json().get("response", "")
+    data = resp.json()
+    return data.get("message", {}).get("content", "")
 
 
 # ── aggregate helper for the hook ───────────────────────────────

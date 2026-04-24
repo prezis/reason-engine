@@ -140,6 +140,43 @@ def test_check_report_samples_and_calls_backend():
     assert all(v.verdict == "supports" for v in verdicts)
 
 
+def test_default_backend_uses_chat_endpoint_with_think_false(monkeypatch):
+    """Regression guard for the qwen3.x silent-thinking bug — the default
+    backend MUST use /api/chat with think=False, otherwise responses come
+    back empty inside any reasonable num_predict budget."""
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"message": {"content": "ok"}, "done_reason": "stop"}
+
+    def fake_post(url, json=None, timeout=None):
+        captured["url"] = url
+        captured["body"] = json
+        return FakeResponse()
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    from reason.semantic_sampler import _default_ollama_backend
+    result = _default_ollama_backend("test prompt")
+
+    assert result == "ok"
+    assert captured["url"].endswith("/api/chat"), (
+        "default backend must use /api/chat — /api/generate strands qwen3.x "
+        "in thinking mode"
+    )
+    assert captured["body"].get("think") is False, (
+        "think:False is required to suppress qwen's silent-thinking output"
+    )
+    assert "messages" in captured["body"], (
+        "chat endpoint requires a messages[] array, not a prompt string"
+    )
+
+
 def test_check_report_with_missing_file_marks_unknown():
     from reason.parser import WorkerReport
 

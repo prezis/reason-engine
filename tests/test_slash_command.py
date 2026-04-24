@@ -44,6 +44,20 @@ def test_stage3_requires_grounding_check(body: str):
     )
 
 
+def test_stage3_prefers_runtime_validator_over_self_report(body: str):
+    """Stage 3 must treat ~/.reason-logs/<session>/validation.jsonl (written
+    by the reason-validator.py hook) as authoritative, falling back to the
+    prompt-level Tool-use summary only when the log is missing."""
+    assert "validation.jsonl" in body, (
+        "Stage 3 must read the hook's validation.jsonl — otherwise the "
+        "runtime validator's authoritative verdict is ignored"
+    )
+    assert "authoritative" in body.lower(), (
+        "Stage 3 must name the runtime validator as authoritative over "
+        "the worker's self-reported Tool-use summary"
+    )
+
+
 def test_stage4_downweights_low_grounding(body: str):
     """Stage 4 must explicitly downweight claims supported only by
     low-grounding workers — otherwise the grounding tag is decorative."""
