@@ -187,6 +187,10 @@ def test_rubric_judge_sync_passes_think_false(monkeypatch):
     )
     assert captured["body"]["format"] == "json"
     assert captured["body"]["options"]["num_predict"] >= 1000
+    assert "keep_alive" in captured["body"], (
+        "judge must pass keep_alive so the pipeline can extend residency "
+        "per-request without requiring a global systemd change"
+    )
 
 
 # ── JSON serialization for CLI / JSONL logging ──────────────────

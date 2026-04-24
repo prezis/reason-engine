@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 
 OLLAMA_URL = os.environ.get("REASON_OLLAMA_URL", "http://localhost:11434/api/generate")
 DEFAULT_MODEL = os.environ.get("REASON_JUDGE_MODEL", "qwen3.5:27b")
+# Keep-alive extension for the rubric judge. "30m" keeps the model warm across
+# back-to-back /reason invocations without blocking other callers — set per
+# request (not globally) for multi-session safety.
+DEFAULT_KEEP_ALIVE = os.environ.get("REASON_OLLAMA_KEEP_ALIVE", "5m")
 CRITERIA = (
     "correctness",
     "evidence_quality",
@@ -128,6 +132,7 @@ def rubric_judge_sync(
         "stream": False,
         "think": False,
         "format": "json",
+        "keep_alive": DEFAULT_KEEP_ALIVE,
         "options": {"temperature": 0.1, "num_predict": 2000, "num_ctx": 8192},
     }
     try:

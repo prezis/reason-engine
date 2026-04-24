@@ -175,6 +175,45 @@ def test_default_backend_uses_chat_endpoint_with_think_false(monkeypatch):
     assert "messages" in captured["body"], (
         "chat endpoint requires a messages[] array, not a prompt string"
     )
+    assert "keep_alive" in captured["body"], (
+        "keep_alive must be present to allow the pipeline to extend the "
+        "model's residency without mutating systemd globally"
+    )
+
+
+def test_sampler_model_can_differ_from_judge_via_env(monkeypatch):
+    """Layer-5 must allow a cross-family model (e.g. hermes3:8b) without
+    changing the Stage-3 rubric judge. Closes the same-family self-grading
+    hole flagged by /reason on 2026-04-24."""
+    import importlib
+    import reason.semantic_sampler as ss
+
+    monkeypatch.setenv("REASON_SEMANTIC_SAMPLER_MODEL", "hermes3:8b")
+    # REASON_JUDGE_MODEL intentionally stays at its (legacy) value — the
+    # sampler env var must take precedence.
+    importlib.reload(ss)
+
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return {"message": {"content": "ok"}}
+
+    def fake_post(url, json=None, timeout=None):
+        captured["body"] = json
+        return FakeResponse()
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", fake_post)
+    ss._default_ollama_backend("x")
+
+    assert captured["body"]["model"] == "hermes3:8b"
+
+    # Reload again with env cleared so subsequent tests get the default.
+    monkeypatch.delenv("REASON_SEMANTIC_SAMPLER_MODEL", raising=False)
+    importlib.reload(ss)
 
 
 def test_check_report_with_missing_file_marks_unknown():

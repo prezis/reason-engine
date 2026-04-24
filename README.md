@@ -98,10 +98,29 @@ curl -s http://localhost:11434/api/generate \
 | RTX 4060 / 3060 (8 GB) | 8 GB | `qwen3:4b` | ~3 GB | Minimum viable; expect noisier scores. |
 | CPU only | — | `qwen3:4b` on CPU | ~3 GB | Slow (~10-30s per judge call); works. |
 
-**Swapping models:** set `REASON_JUDGE_MODEL=<ollama-tag>` in your shell or
-add it to the hook's environment. The same variable is respected by the
-built-in `python -m reason.judge` CLI and by the `reason/semantic_sampler.py`
-Layer-5 backend, so both gates use the same model.
+**Swapping models — env vars:**
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `REASON_JUDGE_MODEL` | `qwen3.5:27b` | Stage-3 rubric judge. Called from `python -m reason.judge` and the `local_rubric_judge` MCP tool path. |
+| `REASON_SEMANTIC_SAMPLER_MODEL` | falls back to `REASON_JUDGE_MODEL` | **Layer-5 semantic sampler. Set this to a cross-family model to close the same-family self-grading hole** — e.g. `REASON_SEMANTIC_SAMPLER_MODEL=hermes3:8b` while the judge stays on qwen3.5:27b. Validated by the REASON synthesis itself 2026-04-24. |
+| `REASON_OLLAMA_KEEP_ALIVE` | `5m` | Per-request keep-alive sent to Ollama. Set to `30m` or `60m` to eliminate cold-swap on back-to-back `/reason` calls without requiring a global systemd change (multi-session safe). |
+| `REASON_OLLAMA_URL` | `http://localhost:11434/api/generate` | Judge endpoint override (e.g. remote Ollama). |
+| `REASON_OLLAMA_CHAT_URL` | `http://localhost:11434/api/chat` | Sampler endpoint override. |
+
+**Cross-family Layer-5 (recommended if your card has ≥24 GB):** the Stage-3
+rubric judge scores whole worker reports (IFEval-heavy task — qwen3.5:27b
+wins there). The Layer-5 sampler checks individual quote-supports-claim
+decisions (lighter task, benefits from family diversity). Set:
+
+```bash
+export REASON_JUDGE_MODEL=qwen3.5:27b           # Stage-3 stays here
+export REASON_SEMANTIC_SAMPLER_MODEL=hermes3:8b # Layer-5 gets a different family
+export REASON_OLLAMA_KEEP_ALIVE=30m             # keep both warm between calls
+```
+
+Requires `ollama pull hermes3:8b` (4.7 GB loaded) and your `OLLAMA_MAX_LOADED_MODELS`
+to be ≥ 2 (systemd default is fine).
 
 **4090-specific guidance.** Because qwen3.5:27b loads to ~22 GB on a 24 GB
 card, leave the GPU otherwise idle while running /reason (no browser

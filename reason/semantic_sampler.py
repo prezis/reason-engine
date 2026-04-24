@@ -225,16 +225,36 @@ def check_report(
     return verdicts
 
 
-# ── default backend (Ollama qwen3.5:27b via httpx) ──────────────
+# ── default backend (Ollama via httpx) ──────────────────────────
 
-_OLLAMA_URL = "http://localhost:11434/api/chat"
-_OLLAMA_MODEL = "qwen3.5:27b"
+import os as _os
+
+_OLLAMA_URL = _os.environ.get(
+    "REASON_OLLAMA_CHAT_URL", "http://localhost:11434/api/chat"
+)
+# Layer-5 judge model. Falls back to REASON_JUDGE_MODEL for backwards
+# compatibility, then to qwen3.5:27b. Setting this to a different family
+# than the Stage-3 rubric judge (e.g. hermes3:8b) closes the same-family
+# self-grading hole — see patterns/subagent-output-grounding-contract.md.
+_OLLAMA_MODEL = _os.environ.get(
+    "REASON_SEMANTIC_SAMPLER_MODEL",
+    _os.environ.get("REASON_JUDGE_MODEL", "qwen3.5:27b"),
+)
+# Keep-alive extension. "30m" keeps the sampler model warm across back-to-back
+# /reason invocations without blocking other Ollama callers — set only on our
+# requests, not globally at the systemd level (multi-session safety).
+_OLLAMA_KEEP_ALIVE = _os.environ.get("REASON_OLLAMA_KEEP_ALIVE", "5m")
 
 
 def _default_ollama_backend(prompt: str) -> str:
-    """Call qwen3.5:27b on local Ollama. Uses the /api/chat endpoint with
-    `think: false` because qwen3.x models otherwise enter a silent-thinking
-    mode that emits empty responses inside num_predict-limited budgets.
+    """Call the configured Layer-5 judge on local Ollama. Uses the /api/chat
+    endpoint with `think: false` because qwen3.x models otherwise enter a
+    silent-thinking mode that emits empty responses inside num_predict-limited
+    budgets — see docs/qwen-thinking-mode.md.
+
+    Model defaults to qwen3.5:27b but is overridable via
+    REASON_SEMANTIC_SAMPLER_MODEL (preferred: cross-family choice like
+    hermes3:8b) or REASON_JUDGE_MODEL (legacy fallback).
 
     Raises if httpx is missing or the request fails — caller should wrap
     or inject a stub backend for tests.
@@ -248,6 +268,7 @@ def _default_ollama_backend(prompt: str) -> str:
             "think": False,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
+            "keep_alive": _OLLAMA_KEEP_ALIVE,
             "options": {"temperature": 0.0, "num_predict": 400},
         },
         timeout=90.0,
