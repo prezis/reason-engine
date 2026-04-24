@@ -81,6 +81,40 @@ slash command calls `mcp__local-ai__local_rubric_judge` in Stage 3. Requires
 a local Ollama with `qwen3.5:27b` (or any model you wire in). Install the
 MCP server per its README and the judge tool is available.
 
+## Grounding contract — why the workers actually invoke tools
+
+The `/reason` pipeline is only useful if workers check real sources instead of
+generating plausible-sounding prose from training data. The failure mode we
+observed (and then fixed) was: every worker finishing with `0 tool uses`,
+producing role-differentiated-but-unverified opinions, which the orchestrator
+then synthesized into a plan that looked grounded but wasn't.
+
+The fix lives in two layers:
+
+1. **Imperative worker prompts.** Each empirical role (adversarial, skeptic,
+   synthesist, domain-expert) opens with a `## MANDATORY PRE-WORK` block that
+   names concrete tools to call (`Grep`, `Read`, `Glob`, `mcp__qmd__search`,
+   `mcp__qmd__vector_search`, `mcp__local-ai__local_web_search`) and the
+   minimum number of files to actually `Read`. Declarative "you have access
+   to the vault" is replaced with imperative "run `Grep` on these keywords".
+
+2. **Verifiable citation format.** Citations must take the form
+   `path/file.md:L23-L45 > "exact quoted snippet"` — invented `[[wikilinks]]`
+   are explicitly flagged as red-flag behavior. Line-range-plus-quote forces
+   a real `Read` call to produce.
+
+The `baseline` worker is **tool-less by design** — its distinctive YAGNI voice
+comes from first-reaction intuition, not vault lookup. It explicitly declares
+itself as such so `0 tool uses` there isn't mistaken for a grounding failure.
+
+Every empirical worker's output format requires a `Tool-use summary` field so
+the rubric judge (Stage 3) can detect and downweight low-grounding reports.
+
+Regression guarded by `tests/test_worker_prompts.py` — the contract tests will
+fail if a future edit strips the `MANDATORY PRE-WORK` block, removes tool
+names, drops the line-range citation format, or accidentally adds tool
+mandates to baseline.
+
 ## Usage
 
 In any Claude Code session:
